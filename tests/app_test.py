@@ -1,4 +1,5 @@
-from app.app import app
+from project.app import create_app
+app = create_app()
 
 def test_healthz():
     tester = app.test_client()
