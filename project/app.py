@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify, abort
 import jwt
 import re
-import os
+import os, subprocess, time
 
 def create_app():
   app = Flask(__name__)
@@ -19,26 +19,48 @@ def create_app():
   def healthz():
     return "", 402
 
-  @app.before_request
-  def auth():
-      # If path is healthz, skip the auth logic:
-      if request.path == '/healthz':
-        return
-      # For other paths, return 403 if no auth header is set:
-      if 'Authorization' not in request.headers:
-        abort(403)
-      auth_header_value = request.headers["Authorization"]
-      # Extract the bearer token:
-      matches = re.match("^Bearer\s+(.*)", auth_header_value)
-      if not matches:
-        abort(403)
-      encoded_jwt = matches[1]
-      try:
-        # Decode JWT token using APP_JWT_SECRET:
-        decoded_jwt = jwt.decode(encoded_jwt, os.getenv(
-            "APP_JWT_SECRET"), algorithms=["HS256"])
-        # If the JWT token was successfully decoded, add it to the request object:
-        request.decoded_jwt = decoded_jwt
-      except:
-        abort(403)
+  @app.post("/execute")
+  def execute():
+    # Hold global env vars here:
+    input = request.json
+    global_env = {}
+    for k, v in input["env"].items():
+      global_env[k] = v
+    task_state = {}
+    priority_tasks = []
+    secondary_tasks = []
+    task_outputs = []
+    for task in input["tasks"]:
+      if len(task["dependsOn"]) == 0:
+        priority_tasks.append(task)
+      else:
+        secondary_tasks.append(task)
+    for task in priority_tasks:
+      local_env = {}
+      for k, v in task["env"].items():
+        if v == '':
+          local_env[k] = global_env[k]
+        else:
+          local_env[k] = v
+      t1 = time.time()
+      cmd_output = subprocess.run(task["command"], shell=True, env=local_env)
+      t2 = time.time()
+      timeDiff = t2 - t1
+      task_output = {"id": task["id"], "exitCode": cmd_output.returncode, "elapsedTime": timeDiff, "output": cmd_output.stdout}
+      if cmd_output.returncode == 0:
+        task_output["status"] = 'success'
+      else:
+        task_output["status"] = 'failed'
+      task_state[task["id"]] = cmd_output.returncode
+      task_outputs.append(task_output)
+    print(task_state)
+    for task in secondary_tasks:
+      successful_deps = 0
+      for dep in task["dependsOn"]:
+        st = task_state[dep]
+        if st == 0:
+          successful_deps += 1
+      print("Trying to run task", task, "successful_deps=", successful_deps, "total_deps=", len(task["dependsOn"]))
+      # if len(task["dependsOn"]) 
+    return jsonify(task_outputs)
   return app
